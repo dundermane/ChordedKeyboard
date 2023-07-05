@@ -12,40 +12,8 @@ from adafruit_display_shapes.rect import Rect
 import adafruit_logging as logging
 import neopixel
 from chords import nasa_en as chord_map
-from widgets import WidgetBase, SpiffChorderUIWidget, DebugWidget, TypistGameWidget, NavigationWidget, PageBase
+from widgets import WidgetBase, SpiffChorderUIWidget, DebugWidget, TypistGameWidget, NavigationWidget, PageBase, LastChordedWidget
 from keyboard import ChordedKeyboard, Keys, Key
-
-"""
-Monitor all keys using keypad module
-"""
-
-async def monitor_keys(keys, kb):
-    with keypad.Keys(
-            keys,
-            value_when_pressed=False,
-            pull=True
-    ) as keys:
-
-        hot = False
-        while True:
-            key_event = keys.events.get()
-            if key_event is not None:
-                if hot and key_event.released:
-                    ## insert key action code here
-                    try:
-                        kb.last_chorded = chord_map[tuple(sorted(kb.pressed))]
-                    except KeyError as err:
-                        kb.last_chorded = "err"
-                    kb.pressed.remove(key_event.key_number)
-                    hot = False
-                elif key_event.pressed:
-                    kb.pressed.append(key_event.key_number)
-                    hot = True
-                elif key_event.released:
-                    kb.pressed.remove(key_event.key_number)
-                else:
-                    print(f"unhandled key event")
-            await asyncio.sleep(0)
 
 
 """
@@ -61,23 +29,33 @@ async def display_ui(main_group, current_page, k0, k12):
         current_page.into(main_group)
         while True:
 
-            k0_event = k0.events.get()
-            if k0_event is not None:
-                if k0_event.pressed:
-                    if k0_event.key_number == 0:
-                        if current_page.onD1 is not None:
-                            current_page = current_page.onD1
-                            break
-                    elif k0_event.key_number == 1:
-                        if current_page.onD2 is not None:
-                            current_page = current_page.onD2
-                            break
-
             k12_event = k12.events.get()
             if k12_event is not None:
                 if k12_event.pressed:
-                    if current_page.onD0 is not None:
+                    if k12_event.key_number == 0:
+                        if isinstance(current_page.onD1, PageBase):
+                            current_page = current_page.onD1
+                            break
+                        elif callable(current_page.onD1):
+                            current_page.onD1()
+                            break
+
+                    elif k12_event.key_number == 1:
+                        if isinstance(current_page.onD2, PageBase):
+                            current_page = current_page.onD2
+                            break
+                        elif callable(current_page.onD2):
+                            current_page.onD2()
+                            break
+
+            k0_event = k0.events.get()
+            if k0_event is not None:
+                if k0_event.pressed:
+                    if isinstance(current_page.onD0, PageBase):
                         current_page = current_page.onD0
+                        break
+                    elif callable(current_page.onD0):
+                        current_page.onD0()
                         break
 
             current_page.update()
@@ -121,23 +99,27 @@ async def main():
     key_reps = SpiffChorderUIWidget(kb, logger=logger)
 
     # Set up typing game
-    game_widget = TypistGameWidget()
+    game_widget = TypistGameWidget(kb)
 
     # Set up navigation
     nav_widget = NavigationWidget()
 
+    # Set up "last chorded" widget
+    last_chorded_widget = LastChordedWidget(kb)
+
     # Set up main page
-    start_page = PageBase("Start", "This is a page where you start")
-    start_page.add_widget(debug_widget)
+    start_page = PageBase("Home", "This is a page where you start")
+    # start_page.add_widget(debug_widget)
     start_page.add_widget(key_reps)
     start_page.add_widget(nav_widget)
+    start_page.add_widget(last_chorded_widget)
 
-    game_page = PageBase("Pract", "A practice game to up the WPM\'s")
-    game_page.add_widget(game_widget)
+    game_page = PageBase("Game", "A practice game to up the WPM\'s")
     game_page.add_widget(key_reps)
+    game_page.add_widget(game_widget)
     game_page.add_widget(nav_widget)
 
-    start_page.onD0 = game_page
+    start_page.onD2 = game_page
     game_page.onD0 = start_page
 
     thumb_common = set_low(board.A0)
@@ -163,8 +145,7 @@ async def main():
             pull=True
     )
 
-
-    keys_task = asyncio.create_task(monitor_keys(kb.keys.keymap(), kb))
+    keys_task = asyncio.create_task(kb.monitor_keys())
     ui_task = asyncio.create_task(display_ui(main_group, start_page, k0, k12))
     await asyncio.gather(keys_task, ui_task)
 
